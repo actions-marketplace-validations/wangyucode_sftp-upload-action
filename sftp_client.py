@@ -9,20 +9,47 @@ class SFTPClientWrapper:
         self.transport.use_compression(True) # Enable compression if supported
         
         if key_data:
-            # Paramiko expects a file-like object or filename for keys
-            # If key_data is string, we might need to handle it.
-            # Assuming key_data is passed as a string content or path?
-            # Action input usually passes content or path.
-            # If it looks like a path and exists, use it.
-            # Else treat as content.
-            import io
-            if os.path.exists(key_data):
-                pkey = paramiko.RSAKey.from_private_key_file(key_data, password=passphrase)
-            else:
-                pkey = paramiko.RSAKey.from_private_key(io.StringIO(key_data), password=passphrase)
+            pkey = self._load_private_key(key_data, passphrase)
             self.transport.connect(username=username, pkey=pkey)
         else:
             self.transport.connect(username=username, password=password)
+            
+    def _load_private_key(self, key_data, passphrase):
+        import io
+        
+        # Determine if key_data is a path or content
+        if os.path.exists(key_data):
+            # It's a file path
+            with open(key_data, 'r') as f:
+                key_content = f.read()
+        else:
+            # It's content
+            key_content = key_data
+
+        # Try different key types
+        key_classes = [
+            paramiko.RSAKey,
+            paramiko.Ed25519Key,
+            paramiko.ECDSAKey
+        ]
+        
+        # Also try DSS if available
+        try:
+            from paramiko.dsskey import DSSKey
+            key_classes.append(DSSKey)
+        except ImportError:
+            pass
+
+        for key_class in key_classes:
+            try:
+                key_file = io.StringIO(key_content)
+                return key_class.from_private_key(key_file, password=passphrase)
+            except Exception:
+                continue
+        
+        # If we get here, we failed to load the key
+        raise ValueError("Could not load private key. Supported types: RSA, Ed25519, ECDSA, DSS.")
+
             
     def close(self):
         self.transport.close()
