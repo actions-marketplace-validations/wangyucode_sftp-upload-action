@@ -160,20 +160,31 @@ def main():
         if remove_extra_files:
             print("Checking for extra files on server...")
             try:
-                # Get all remote files
+                # Get all remote files and directories
                 remote_files_list = client.list_remote_files_recursively(remote_dir)
                 remote_files_set = set(remote_files_list)
                 
                 # Files we expect to be there: local files + hash file
-                expected_files = set(local_files)
-                expected_files.add('.sftp_upload_action_hashes')
+                expected_items = set(local_files)
+                expected_items.add('.sftp_upload_action_hashes')
                 
-                # Determine extra files
-                extra_files = remote_files_set - expected_files
+                # Also add all parent directories of local files to expected_items
+                for rel_path in local_files:
+                    path_parts = rel_path.split('/')
+                    # Iterate through all parent directories
+                    for i in range(len(path_parts) - 1):
+                        parent_dir = '/'.join(path_parts[:i+1])
+                        expected_items.add(parent_dir)
                 
-                if extra_files:
-                    print(f"Found {len(extra_files)} extra files. Removing...")
-                    for rel_path in extra_files:
+                # Determine extra items
+                extra_items = remote_files_set - expected_items
+                
+                if extra_items:
+                    print(f"Found {len(extra_items)} extra items. Removing...")
+                    # Sort by length descending to delete deep items first
+                    sorted_extra_items = sorted(list(extra_items), key=len, reverse=True)
+                    
+                    for rel_path in sorted_extra_items:
                         full_remote_path = os.path.join(remote_dir, rel_path).replace('\\', '/')
                         if not dry_run:
                             client.delete_file(full_remote_path)

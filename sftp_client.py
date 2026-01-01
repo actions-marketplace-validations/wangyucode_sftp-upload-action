@@ -113,7 +113,7 @@ class SFTPClientWrapper:
 
     def list_remote_files_recursively(self, remote_dir):
         """
-        List all files in remote directory recursively.
+        List all files and directories in remote directory recursively.
         Returns a list of relative paths.
         """
         sftp = self.create_sftp()
@@ -128,6 +128,7 @@ class SFTPClientWrapper:
                     rel_path = f"{relative_base}/{entry_name}" if relative_base else entry_name
                     
                     if stat.S_ISDIR(entry.st_mode):
+                        file_list.append(rel_path)
                         _walk(full_path, rel_path)
                     else:
                         file_list.append(rel_path)
@@ -145,7 +146,11 @@ class SFTPClientWrapper:
     def delete_file(self, remote_path):
         sftp = self.create_sftp()
         try:
-            sftp.remove(remote_path)
+            try:
+                sftp.remove(remote_path)
+            except IOError:
+                # Try rmdir if remove failed (e.g. it's a directory)
+                sftp.rmdir(remote_path)
         except IOError:
             pass
         finally:
