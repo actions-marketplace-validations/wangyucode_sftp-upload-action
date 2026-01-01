@@ -1,45 +1,75 @@
 name: 'SFTP uploader'
+description: 'Upload files to server via SFTP (v3)'
 author: 'wycode.cn'
 branding:
-  color: 'green'
   icon: 'upload'
-description: 'upload files to server via SFTP'
+  color: 'green'
 inputs:
   host:
+    description: 'SFTP Host'
     required: true
   port:
+    description: 'SFTP Port'
     required: false
-    default: 22
+    default: '22'
   username:
+    description: 'SFTP Username'
     required: false
     default: 'root'
   password:
-    required: true
-  compress:
+    description: 'SFTP Password'
     required: false
-    default: false
+  privateKey:
+    description: 'SSH Private Key'
+    required: false
+  passphrase:
+    description: 'Passphrase for Private Key'
+    required: false
   localDir:
+    description: 'Local directory to upload'
     required: true
   remoteDir:
+    description: 'Remote directory path'
     required: true
   dryRun:
+    description: 'Dry run mode (no changes)'
     required: false
-    default: false
-  privateKey:
-    required: false
-    default: ''
-  passphrase:
-    required: false
-    default: ''
+    default: 'false'
   exclude:
+    description: 'Glob patterns to exclude'
     required: false
-    default: ''
   forceUpload:
+    description: 'Force upload all files (disable hash check)'
     required: false
-    default: false
+    default: 'false'
   removeExtraFilesOnServer:
+    description: 'Remove extra files on server that are not in local directory'
     required: false
-    default: false
+    default: 'false'
+  concurrency:
+    description: 'Number of concurrent uploads'
+    required: false
+    default: '4'
 runs:
-  using: 'node20'
-  main: 'dist/index.js'
+  using: "composite"
+  steps:
+    - name: Install Dependencies
+      run: pip install -r ${{ github.action_path }}/requirements.txt
+      shell: bash
+    - name: Run SFTP Upload
+      run: python ${{ github.action_path }}/main.py
+      shell: bash
+      env:
+        INPUT_HOST: ${{ inputs.host }}
+        INPUT_PORT: ${{ inputs.port }}
+        INPUT_USERNAME: ${{ inputs.username }}
+        INPUT_PASSWORD: ${{ inputs.password }}
+        INPUT_PRIVATEKEY: ${{ inputs.privateKey }}
+        INPUT_PASSPHRASE: ${{ inputs.passphrase }}
+        INPUT_LOCALDIR: ${{ inputs.localDir }}
+        INPUT_REMOTEDIR: ${{ inputs.remoteDir }}
+        INPUT_DRYRUN: ${{ inputs.dryRun }}
+        INPUT_EXCLUDE: ${{ inputs.exclude }}
+        INPUT_FORCEUPLOAD: ${{ inputs.forceUpload }}
+        INPUT_REMOVEEXTRAFILESONSERVER: ${{ inputs.removeExtraFilesOnServer }}
+        INPUT_CONCURRENCY: ${{ inputs.concurrency }}

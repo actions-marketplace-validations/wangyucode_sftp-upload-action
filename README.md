@@ -1,87 +1,67 @@
-# sftp-upload-action
+# SFTP Upload Action (v3)
 
-this is a github action script for upload files to server via SFTP protocol.
+[🇨🇳 简体中文](./README_zh.md)
 
-![release](https://flat.badgen.net/github/release/wangyucode/sftp-upload-action)
-[![Depfu](https://badges.depfu.com/badges/4b5cc2f5563a240e7b6c6106ded3e4c0/overview.svg)](https://depfu.com/github/wangyucode/sftp-upload-action?project_id=37917)
+A GitHub Action to upload files to a server via SFTP.
+
+## Features (v3)
+*   🚀 **High Performance**: Python-based implementation with configurable concurrency.
+*   🧠 **Smart Skip**: Uses content hash (`MD5`) to skip unchanged files.
+*   📂 **State Management**: Maintains a `.sftp_upload_action_hashes` file on the server to track file states without needing SSH shell access.
+*   🔒 **Secure**: Supports password and private key authentication.
 
 ## Inputs
 
-```
-  host: 'example.com',                  # Required.
-  port: 22,                             # Optional, Default to 22.
-  username: 'user',                     # Required.
-  password: 'password',                 # Optional.
-  privateKey: '',                       # Optional, your private key(Raw content or key path).
-  passphrase: '',                       # Optional.
-  compress: false,                      # Optional, compress for ssh connection. Default to false.
-  localDir: 'dist',                     # Required, Absolute or relative to cwd.
-  remoteDir: '/path/to/dest'            # Required, Absolute path only.
-  dryRun: false                         # Optional. Default to false.
-  exclude: 'node_modules/,**/*.spec.ts' # Optional. exclude patterns (glob), working on both server-side and client-side like .gitignore, use ',' to split, Default to ''.
-  forceUpload: false                    # Optional, Force uploading all files, Default to false(upload only newer files).
-  removeExtraFilesOnServer: false       # Optional, Remove extra files on server. Default to false.
-```
+| Input | Description | Required | Default |
+| :--- | :--- | :--- | :--- |
+| `host` | SFTP Host address | **Yes** | |
+| `port` | SFTP Port | No | `22` |
+| `username` | SFTP Username | **Yes** | `root` |
+| `password` | SFTP Password | No | |
+| `privateKey` | SSH Private Key content | No | |
+| `passphrase` | Passphrase for Private Key | No | |
+| `localDir` | Local directory to upload | **Yes** | |
+| `remoteDir` | Remote directory path | **Yes** | |
+| `dryRun` | Dry run mode (no changes) | No | `false` |
+| `exclude` | Comma-separated glob patterns to exclude | No | |
+| `forceUpload` | Force upload all files (disable hash check) | No | `false` |
+| `removeExtraFilesOnServer` | Remove extra files on server that are not in local directory | No | `false` |
+| `concurrency` | Number of concurrent uploads | No | `4` |
 
-## Example usage
+## Example Usage
 
-### Use password
-
-```yml
-- name: SFTP uploader
-  uses: wangyucode/sftp-upload-action@v2.0.4
-  with:
-    host: "wycode.cn"
-    password: ${{ secrets.password }}
-    localDir: "dist"
-    remoteDir: "/data/nginx/www/wycode.cn/"
-```
-
-### Use privateKey
-
-```yml
-- name: SFTP uploader
-  uses: wangyucode/sftp-upload-action@v2.0.4
-  with:
-    host: "wycode.cn"
-    privateKey: ${{ secrets.key }}
-    localDir: "dist"
-    remoteDir: "/data/nginx/www/wycode.cn/"
-```
-
-### Example for a complete github action file
-
-```yml
-name: Upload complete repo (e.g. website) to a SFTP destination
-
+```yaml
+name: Deploy
 on: [push]
 
 jobs:
-  Upload-to-SFTP:
+  deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: 🚚 Get latest code # Checkout the latest code
-        uses: actions/checkout@v3
-
-      - name: 📂 SFTP uploader # Upload to SFTP
-        uses: wangyucode/sftp-upload-action@v2.0.4
+      - uses: actions/checkout@v4
+      
+      - name: Upload via SFTP
+        uses: wangyucode/sftp-upload-action@v3
         with:
-          host: ${{ secrets.HOST }} # Recommended to put the credentials in github secrets.
-          username: ${{ secrets.USER }}
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
           password: ${{ secrets.PASSWORD }}
-          compress: true # Compression
-          forceUpload: true # Optional, Force uploading all files, Default to false(upload only newer files).
-          localDir: "." # Required, Absolute or relative to cwd.
-          remoteDir: "/" # Required, Absolute path only.
-          exclude: ".git,.DS_Store,**/node_modules" # Optional. exclude patterns (glob) like .gitignore, use ',' to split, Default to ''.
+          localDir: 'dist'
+          remoteDir: '/var/www/html'
+          concurrency: 10
 ```
 
-## Upload newer files
+## Migrating from v2 to v3
 
-the action will check `modifyTime` and upload the newer files if `forceUpload` is false.
-but you should restore the modified time before uploading.
-here is an action that can change the modified time: https://github.com/marketplace/actions/git-restore-mtime
+Version 3 is a complete rewrite in Python to improve performance and reliability.
 
-## Other Options
+### Key Changes
+1.  **Platform**: Switched from Node.js to Python (Composite Action).
+2.  **Smart Skipping**: v2 used file size/timestamp. v3 uses **Content Hash** (MD5) stored in a metadata file `.sftp_upload_action_hashes` on the server. This ensures that only truly changed files are uploaded, even if timestamps change (common in CI builds).
+3.  **Concurrency**: Added `concurrency` input to control parallel uploads (default: 4).
 
-[Crane](https://github.com/wangyucode/crane) is a simple, fast, and secure tool written in Rust for downloading and deploying your `.tar.gz` archive files without the need for server passwords or keys.
+> The action now creates a `.sftp_upload_action_hashes` file in the `remoteDir`. Do not delete this file if you want the "Smart Skip" feature to work.
+
+### Migration Steps
+1.  Just update the version tag to `@v3` in your workflow.
+2.  Enjoy faster uploads!

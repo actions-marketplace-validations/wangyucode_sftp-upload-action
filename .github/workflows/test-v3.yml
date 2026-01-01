@@ -1,0 +1,161 @@
+name: Test v3
+
+on: 
+  workflow_dispatch:
+
+jobs:
+  test-all-features:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 0. Cleanup before start
+      - name: Cleanup remote test dirs
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.KEY }}
+          script: |
+            rm -rf /tmp/sftp-test-v3*
+            echo "Cleaned up /tmp/sftp-test-v3*"
+
+      # 1. Test Concurrency & Initial Upload
+      - name: Test 1 - Initial Upload (Concurrency)
+        uses: ./
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          privateKey: ${{ secrets.KEY }}
+          localDir: "test"
+          remoteDir: "/tmp/sftp-test-v3"
+          concurrency: 4
+
+      - name: Verify Test 1
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.KEY }}
+          script: |
+            if [ -f /tmp/sftp-test-v3/file1 ] && [ -f /tmp/sftp-test-v3/folder1/file3 ]; then
+              echo "✅ Test 1 Passed: Files uploaded successfully"
+            else
+              echo "❌ Test 1 Failed: Files missing"
+              ls -R /tmp/sftp-test-v3
+              exit 1
+            fi
+
+      # 2. Test Delta Upload (Should skip)
+      - name: Test 2 - Delta Upload (Should skip)
+        uses: ./
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          privateKey: ${{ secrets.KEY }}
+          localDir: "test"
+          remoteDir: "/tmp/sftp-test-v3"
+
+      # 3. Test Exclude
+      - name: Test 3 - Exclude Pattern
+        uses: ./
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          privateKey: ${{ secrets.KEY }}
+          localDir: "test"
+          remoteDir: "/tmp/sftp-test-v3-exclude"
+          exclude: "file1"
+
+      - name: Verify Test 3
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.KEY }}
+          script: |
+            if [ ! -f /tmp/sftp-test-v3-exclude/file1 ] && [ -f /tmp/sftp-test-v3-exclude/file2 ]; then
+              echo "✅ Test 3 Passed: file1 excluded, file2 exists"
+            else
+              echo "❌ Test 3 Failed"
+              ls -R /tmp/sftp-test-v3-exclude
+              exit 1
+            fi
+
+      # 4. Test Dry Run
+      - name: Test 4 - Dry Run
+        uses: ./
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          privateKey: ${{ secrets.KEY }}
+          localDir: "test"
+          remoteDir: "/tmp/sftp-test-v3-dryrun"
+          dryRun: true
+
+      - name: Verify Test 4
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.KEY }}
+          script: |
+            if [ ! -d /tmp/sftp-test-v3-dryrun ]; then
+              echo "✅ Test 4 Passed: Directory does not exist (Dry Run worked)"
+            else
+              echo "❌ Test 4 Failed: Directory created in dry run"
+              exit 1
+            fi
+
+      # 5. Test Remove Extra Files
+      # First ensure we have files there
+      - name: Test 5.1 - Setup for Remove Extra Files
+        uses: ./
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          privateKey: ${{ secrets.KEY }}
+          localDir: "test"
+          remoteDir: "/tmp/sftp-test-v3-sync"
+          
+      - name: Create empty dir for sync test
+        run: mkdir -p test-empty
+
+      - name: Test 5.2 - Remove Extra Files
+        uses: ./
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          privateKey: ${{ secrets.KEY }}
+          localDir: "test-empty"
+          remoteDir: "/tmp/sftp-test-v3-sync"
+          removeExtraFilesOnServer: true
+
+      - name: Verify Test 5
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.KEY }}
+          script: |
+            # Should only contain the hash file
+            file_count=$(ls /tmp/sftp-test-v3-sync | grep -v ".sftp_upload_action_hashes" | wc -l)
+            if [ "$file_count" -eq "0" ]; then
+              echo "✅ Test 5 Passed: All extra files removed"
+            else
+              echo "❌ Test 5 Failed: Extra files remain"
+              ls -la /tmp/sftp-test-v3-sync
+              exit 1
+            fi
+
+      # Cleanup after all tests
+      - name: Final Cleanup
+        if: always()
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.KEY }}
+          script: |
+            rm -rf /tmp/sftp-test-v3*
+            echo "Final cleanup completed"
