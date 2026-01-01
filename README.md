@@ -60,8 +60,16 @@ Version 3 is a complete rewrite in Python to improve performance and reliability
 2.  **Smart Skipping**: v2 used file size/timestamp. v3 uses **Content Hash** (MD5) stored in a metadata file `.sftp_upload_action_hashes` on the server. This ensures that only truly changed files are uploaded, even if timestamps change (common in CI builds).
 3.  **Concurrency**: Added `concurrency` input to control parallel uploads (default: 4).
 
-> The action now creates a `.sftp_upload_action_hashes` file in the `remoteDir`. Do not delete this file if you want the "Smart Skip" feature to work.
-
 ### Migration Steps
 1.  Just update the version tag to `@v3` in your workflow.
 2.  Enjoy faster uploads!
+
+## Notes
+
+### Hash File (`.sftp_upload_action_hashes`)
+A `.sftp_upload_action_hashes` file is created in `remoteDir` to track file states. **Do not delete this file** to ensure "Smart Skip" works correctly.
+
+### File Removal (`removeExtraFilesOnServer`)
+When enabled, this compares local files against the *tracked* remote files in the hash file.
+*   **Only tracked files are deleted.** Untracked files (e.g., manually created) are ignored.
+*   This ensures safety and speed but does not strictly mirror the directory if untracked files exist.

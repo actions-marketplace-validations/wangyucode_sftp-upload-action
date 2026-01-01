@@ -13,7 +13,7 @@ from sftp_client import SFTPClientWrapper, upload_file_with_client, ensure_dir_e
 
 def worker_task(worker_id, client_wrapper, task_queue, result_queue, error_list, local_dir, remote_dir, dry_run, hash_manager, force_upload):
     """
-    Worker thread to process upload tasks using a persistent SFTP connection.
+    Worker thread to process upload and delete tasks using a persistent SFTP connection.
     Also handles hash computation and checking.
     """
     try:
@@ -29,17 +29,47 @@ def worker_task(worker_id, client_wrapper, task_queue, result_queue, error_list,
     try:
         while True:
             try:
-                rel_path = task_queue.get_nowait()
+                task = task_queue.get_nowait()
             except queue.Empty:
                 break
             
+            # Unpack task
+            if isinstance(task, tuple):
+                action, rel_path = task
+            else:
+                action = 'upload'
+                rel_path = task
+
+            if action == 'delete':
+                print(f"[Worker {worker_id}] Processing Delete: {rel_path}")
+                remote_path = os.path.join(remote_dir, rel_path).replace('\\', '/')
+                
+                try:
+                    if dry_run:
+                        print(f"[Worker {worker_id}] Dry run: Would remove {rel_path}")
+                    else:
+                        print(f"[Worker {worker_id}] Removing: {rel_path}")
+                        try:
+                            sftp.remove(remote_path)
+                            print(f"[Worker {worker_id}] Removed: {rel_path}")
+                        except IOError as e:
+                            # If file doesn't exist, that's fine
+                            print(f"[Worker {worker_id}] Warning: Failed to remove {rel_path} (maybe already gone): {e}")
+                except Exception as e:
+                     print(f"[Worker {worker_id}] Error removing {rel_path}: {e}")
+                     error_list.append(e)
+                finally:
+                    task_queue.task_done()
+                continue
+
+            # Default action: upload
+            print(f"[Worker {worker_id}] Processing Upload: {rel_path}")
             local_path = os.path.join(local_dir, rel_path)
             remote_path = os.path.join(remote_dir, rel_path).replace('\\', '/')
             remote_parent = os.path.dirname(remote_path)
             
             try:
                 # Compute local hash
-                print(f"[Worker {worker_id}] Computing hash for: {rel_path}")
                 current_hash = compute_file_hash(local_path)
                 result_queue.put((rel_path, current_hash))
                 print(f"[Worker {worker_id}] Computed hash: {current_hash} for: {rel_path}")
@@ -144,8 +174,23 @@ def main():
         start_time = time.time()
 
         task_queue = queue.Queue()
+        # Add upload tasks
         for rel_path in local_files:
-            task_queue.put(rel_path)
+            task_queue.put(('upload', rel_path))
+        
+        # Add delete tasks if enabled
+        if remove_extra_files:
+            # Files in remote hash but not in local files
+            remote_tracked_files = set(hash_manager.hashes.keys())
+            local_files_set = set(local_files)
+            files_to_delete = list(remote_tracked_files - local_files_set)
+            
+            if files_to_delete:
+                print(f"Found {len(files_to_delete)} files to delete (from hash records).")
+                for rel_path in files_to_delete:
+                    task_queue.put(('delete', rel_path))
+            else:
+                 print("No files to delete based on hash records.")
         
         result_queue = queue.Queue()
         threads = []
@@ -172,45 +217,8 @@ def main():
         duration = time.time() - start_time
         print(f"Processing completed in {duration:.2f}s")
 
-        # 7. Remove Extra Files
-        if remove_extra_files:
-            print("Checking for extra files on server...")
-            try:
-                # Get all remote files and directories
-                remote_files_list = client.list_remote_files_recursively(remote_dir)
-                remote_files_set = set(remote_files_list)
-                
-                # Files we expect to be there: local files + hash file
-                expected_items = set(local_files)
-                expected_items.add('.sftp_upload_action_hashes')
-                
-                # Also add all parent directories of local files to expected_items
-                for rel_path in local_files:
-                    path_parts = rel_path.split('/')
-                    # Iterate through all parent directories
-                    for i in range(len(path_parts) - 1):
-                        parent_dir = '/'.join(path_parts[:i+1])
-                        expected_items.add(parent_dir)
-                
-                # Determine extra items
-                extra_items = remote_files_set - expected_items
-                
-                if extra_items:
-                    print(f"Found {len(extra_items)} extra items. Removing...")
-                    # Sort by length descending to delete deep items first
-                    sorted_extra_items = sorted(list(extra_items), key=len, reverse=True)
-                    
-                    for rel_path in sorted_extra_items:
-                        full_remote_path = os.path.join(remote_dir, rel_path).replace('\\', '/')
-                        if not dry_run:
-                            client.delete_file(full_remote_path)
-                            print(f"Removed: {rel_path}")
-                        else:
-                            print(f"Would remove: {rel_path}")
-                else:
-                    print("No extra files found.")
-            except Exception as e:
-                print(f"Warning: Failed to remove extra files: {e}")
+        # 7. (Removed) Extra Files Cleanup is now handled in worker tasks
+
 
         # 8. Update Remote Hash File
         print("Updating remote hash file...")
