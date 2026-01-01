@@ -57,42 +57,6 @@ class SFTPClientWrapper:
     def create_sftp(self):
         return paramiko.SFTPClient.from_transport(self.transport)
 
-    def ensure_remote_dirs(self, remote_dirs):
-        """
-        Create all directories in the list. 
-        Should be called sequentially before parallel uploads.
-        """
-        sftp = self.create_sftp()
-        try:
-            # Sort by length to ensure parents are created first
-            sorted_dirs = sorted(list(remote_dirs), key=len)
-            cache = set()
-            
-            for directory in sorted_dirs:
-                if directory in cache:
-                    continue
-                
-                # Check parts
-                parts = directory.split('/')
-                path = ""
-                for part in parts:
-                    if not part: continue
-                    path += "/" + part
-                    if path in cache:
-                        continue
-                    
-                    try:
-                        sftp.stat(path)
-                    except IOError:
-                        try:
-                            sftp.mkdir(path)
-                        except IOError:
-                            # Ignore if it exists now
-                            pass
-                    cache.add(path)
-        finally:
-            sftp.close()
-
     def download_hashes(self, remote_path):
         sftp = self.create_sftp()
         try:
@@ -156,17 +120,56 @@ class SFTPClientWrapper:
         finally:
             sftp.close()
 
-def upload_single_file(transport, local_path, remote_path):
+
+def ensure_dir_exists(sftp, remote_dir, cache=None):
     """
-    Worker function for uploading a single file.
+    Ensure a directory exists on the remote server, creating it if necessary.
+    Handles recursive creation.
     """
-    sftp = paramiko.SFTPClient.from_transport(transport)
+    remote_dir = remote_dir.replace('\\', '/')
+    if cache is not None and remote_dir in cache:
+        return
+
+    # Base case: root or empty
+    if not remote_dir or remote_dir == '/':
+        return
+
+    # Check if exists
     try:
-        # Optimization: Set window size and packet size for speed
+        sftp.stat(remote_dir)
+        if cache is not None:
+            cache.add(remote_dir)
+        return
+    except IOError:
+        # Doesn't exist (or permission denied), try to create parent first
+        parent = os.path.dirname(remote_dir)
+        if parent and parent != remote_dir:
+            ensure_dir_exists(sftp, parent, cache)
+        
+        # Now create this dir
+        try:
+            sftp.mkdir(remote_dir)
+        except IOError:
+            # Check again, maybe created by another worker
+            try:
+                sftp.stat(remote_dir)
+            except IOError:
+                # Still failing, raise the error
+                raise
+        
+        if cache is not None:
+            cache.add(remote_dir)
+
+
+
+def upload_file_with_client(sftp, local_path, remote_path):
+    """
+    Upload a single file using an existing SFTP client instance.
+    """
+    try:
+        # Optimization: Set window size and packet size for speed if needed
         # sftp.get_channel().set_window_size(2 * 1024 * 1024)
         sftp.put(local_path, remote_path)
     except Exception as e:
         print(f"Error uploading {local_path}: {e}")
         raise e
-    finally:
-        sftp.close()

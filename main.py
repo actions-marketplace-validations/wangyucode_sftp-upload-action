@@ -2,9 +2,54 @@ import os
 import sys
 import argparse
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+import queue
 from utils import HashManager, compute_file_hash, scan_directory
-from sftp_client import SFTPClientWrapper, upload_single_file
+from sftp_client import SFTPClientWrapper, upload_file_with_client, ensure_dir_exists
+
+def worker_task(worker_id, client_wrapper, task_queue, error_list, local_dir, remote_dir, dry_run):
+    """
+    Worker thread to process upload tasks using a persistent SFTP connection.
+    """
+    try:
+        # Create a new SFTP client/channel for this worker
+        sftp = client_wrapper.create_sftp()
+    except Exception as e:
+        print(f"[Worker {worker_id}] Failed to create SFTP client: {e}")
+        error_list.append(e)
+        return
+
+    dir_cache = set()
+
+    try:
+        while True:
+            try:
+                rel_path = task_queue.get_nowait()
+            except queue.Empty:
+                break
+            
+            local_path = os.path.join(local_dir, rel_path)
+            remote_path = os.path.join(remote_dir, rel_path).replace('\\', '/')
+            remote_parent = os.path.dirname(remote_path)
+            
+            if dry_run:
+                print(f"[Worker {worker_id}] Dry run: Uploading {rel_path}")
+                task_queue.task_done()
+                continue
+
+            print(f"[Worker {worker_id}] Uploading: {rel_path}")
+            try:
+                ensure_dir_exists(sftp, remote_parent, dir_cache)
+                upload_file_with_client(sftp, local_path, remote_path)
+                print(f"[Worker {worker_id}] Done: {rel_path}")
+            except Exception as e:
+                print(f"[Worker {worker_id}] Error uploading {rel_path}: {e}")
+                error_list.append(e)
+            finally:
+                task_queue.task_done()
+    finally:
+        if sftp:
+            sftp.close()
 
 def main():
     # Load inputs from environment variables
@@ -96,62 +141,32 @@ def main():
         
         print(f"Files to upload: {len(upload_tasks)}")
 
-        if dry_run:
-            print("Dry run enabled. Skipping actual upload.")
-            sys.exit(0)
-
         if not upload_tasks:
             print("Everything up to date.")
-            # Still update hash file? Yes, to keep it fresh or if local deleted files (not handled here yet, but standard)
-            # Actually, we should probably update hash file to reflect current state.
-            # But if we didn't upload anything, maybe we don't need to. 
-            # However, if we want to support "sync" (delete extra), that's another story.
-            # The v2 had "removeExtraFilesOnServer". 
-            # I should probably respect that if I want full v2 parity, but user didn't emphasize it.
-            # I'll skip "removeExtraFiles" for now unless I see it in action.yml. 
-            # Wait, action.yml had it? Yes.
-            # I removed it from my new action.yml. I should check if I need to add it back.
-            # The user said "rewrite... mainly 4 points". I focused on those.
-            # I'll stick to upload for now.
             pass
         else:
-            # 5. Ensure Remote Directories
-            remote_dirs = set()
-            for rel_path in upload_tasks:
-                remote_rel_dir = os.path.dirname(rel_path)
-                if remote_rel_dir:
-                    remote_full_dir = os.path.join(remote_dir, remote_rel_dir).replace('\\', '/')
-                    remote_dirs.add(remote_full_dir)
-            
-            # Also ensure base remote dir
-            remote_dirs.add(remote_dir)
-
-            print("Ensuring remote directories exist...")
-            client.ensure_remote_dirs(remote_dirs)
-
-            # 6. Parallel Upload
-            print(f"Starting upload with {concurrency} threads...")
+            # 5. Parallel Upload
+            print(f"Starting upload with {concurrency} workers...")
             start_time = time.time()
             
-            with ThreadPoolExecutor(max_workers=concurrency) as executor:
-                futures = {}
-                for rel_path in upload_tasks:
-                    local_path = os.path.join(local_dir, rel_path)
-                    remote_path = os.path.join(remote_dir, rel_path).replace('\\', '/')
-                    
-                    future = executor.submit(upload_single_file, client.transport, local_path, remote_path)
-                    futures[future] = rel_path
-
-                for future in as_completed(futures):
-                    rel_path = futures[future]
-                    try:
-                        future.result()
-                        print(f"Uploaded: {rel_path}")
-                    except Exception as e:
-                        print(f"Failed: {rel_path} - {e}")
-                        # We might want to fail the whole action or continue?
-                        # Usually fail.
-                        sys.exit(1)
+            task_queue = queue.Queue()
+            for task in upload_tasks:
+                task_queue.put(task)
+            
+            threads = []
+            error_list = []
+            
+            for i in range(concurrency):
+                t = threading.Thread(target=worker_task, args=(i+1, client, task_queue, error_list, local_dir, remote_dir, dry_run))
+                t.start()
+                threads.append(t)
+                
+            for t in threads:
+                t.join()
+                
+            if error_list:
+                print(f"Upload completed with {len(error_list)} errors.")
+                sys.exit(1)
 
             duration = time.time() - start_time
             print(f"Upload completed in {duration:.2f}s")
@@ -206,8 +221,12 @@ def main():
         # If we want to clean up hash list for files that no longer exist locally:
         hash_manager.hashes = new_hashes 
         
-        client.upload_hashes(hash_file_remote_path, hash_manager.to_json())
-        print("Done.")
+        if not dry_run:
+            client.upload_hashes(hash_file_remote_path, hash_manager.to_json())
+            print("Done.")
+        else:
+            print("Dry run: Would update remote hash file.")
+            print("Done.")
 
     finally:
         if client:
