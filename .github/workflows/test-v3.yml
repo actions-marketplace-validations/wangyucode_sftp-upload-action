@@ -47,6 +47,15 @@ jobs:
             fi
 
       # 2. Test Delta Upload (Should skip)
+      - name: Get mtime before Test 2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.KEY }}
+          script: |
+            stat -c %Y /tmp/sftp-test-v3/file1 > /tmp/before_mtime_test2
+
       - name: Test 2 - Delta Upload (Should skip)
         uses: ./
         with:
@@ -55,6 +64,23 @@ jobs:
           privateKey: ${{ secrets.KEY }}
           localDir: "test"
           remoteDir: "/tmp/sftp-test-v3"
+
+      - name: Verify Test 2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.KEY }}
+          script: |
+            new_time=$(stat -c %Y /tmp/sftp-test-v3/file1)
+            old_time=$(cat /tmp/before_mtime_test2)
+            if [ "$new_time" == "$old_time" ]; then
+              echo "✅ Test 2 Passed: Files skipped (mtime preserved)"
+            else
+              echo "❌ Test 2 Failed: Files re-uploaded (mtime changed)"
+              echo "Old: $old_time, New: $new_time"
+              exit 1
+            fi
 
       # 3. Test Exclude
       - name: Test 3 - Exclude Pattern
@@ -145,6 +171,43 @@ jobs:
             else
               echo "❌ Test 5 Failed: Extra files remain"
               ls -la /tmp/sftp-test-v3-sync
+              exit 1
+            fi
+
+      # 6. Test Force Upload
+      - name: Get mtime before Test 6
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.KEY }}
+          script: |
+            stat -c %Y /tmp/sftp-test-v3/file1 > /tmp/before_mtime_test6
+            sleep 1 # Ensure mtime will be different if updated
+
+      - name: Test 6 - Force Upload
+        uses: ./
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          privateKey: ${{ secrets.KEY }}
+          localDir: "test"
+          remoteDir: "/tmp/sftp-test-v3"
+          forceUpload: true
+
+      - name: Verify Test 6
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.KEY }}
+          script: |
+            new_time=$(stat -c %Y /tmp/sftp-test-v3/file1)
+            old_time=$(cat /tmp/before_mtime_test6)
+            if [ "$new_time" != "$old_time" ]; then
+              echo "✅ Test 6 Passed: File updated (mtime changed)"
+            else
+              echo "❌ Test 6 Failed: File not updated (mtime same)"
               exit 1
             fi
 
