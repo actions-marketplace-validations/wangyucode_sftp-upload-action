@@ -4,12 +4,17 @@ import argparse
 import time
 import threading
 import queue
+
+# Set stdout to be line buffered so logs appear immediately
+sys.stdout.reconfigure(line_buffering=True)
+
 from utils import HashManager, compute_file_hash, scan_directory
 from sftp_client import SFTPClientWrapper, upload_file_with_client, ensure_dir_exists
 
-def worker_task(worker_id, client_wrapper, task_queue, error_list, local_dir, remote_dir, dry_run):
+def worker_task(worker_id, client_wrapper, task_queue, result_queue, error_list, local_dir, remote_dir, dry_run, hash_manager, force_upload):
     """
     Worker thread to process upload tasks using a persistent SFTP connection.
+    Also handles hash computation and checking.
     """
     try:
         # Create a new SFTP client/channel for this worker
@@ -32,18 +37,32 @@ def worker_task(worker_id, client_wrapper, task_queue, error_list, local_dir, re
             remote_path = os.path.join(remote_dir, rel_path).replace('\\', '/')
             remote_parent = os.path.dirname(remote_path)
             
-            if dry_run:
-                print(f"[Worker {worker_id}] Dry run: Uploading {rel_path}")
-                task_queue.task_done()
-                continue
-
-            print(f"[Worker {worker_id}] Uploading: {rel_path}")
             try:
+                # Compute local hash
+                print(f"[Worker {worker_id}] Computing hash for: {rel_path}")
+                current_hash = compute_file_hash(local_path)
+                result_queue.put((rel_path, current_hash))
+                print(f"[Worker {worker_id}] Computed hash: {current_hash} for: {rel_path}")
+
+                # Check if skip
+                remote_hash = hash_manager.get_remote_hash(rel_path)
+                
+                if not force_upload and remote_hash == current_hash:
+                    # Hash match, skip
+                    print(f"[Worker {worker_id}] Skipped (no change): {rel_path}")
+                    continue
+
+                if dry_run:
+                    print(f"[Worker {worker_id}] Dry run: Uploading {rel_path}")
+                    continue
+
+                print(f"[Worker {worker_id}] Uploading: {rel_path}")
                 ensure_dir_exists(sftp, remote_parent, dir_cache)
                 upload_file_with_client(sftp, local_path, remote_path)
                 print(f"[Worker {worker_id}] Done: {rel_path}")
+
             except Exception as e:
-                print(f"[Worker {worker_id}] Error uploading {rel_path}: {e}")
+                print(f"[Worker {worker_id}] Error processing {rel_path}: {e}")
                 error_list.append(e)
             finally:
                 task_queue.task_done()
@@ -81,6 +100,7 @@ def main():
     print(f"Remote Dir: {remote_dir}")
     print(f"Concurrency: {concurrency}")
 
+    client = None
     # 1. Connect
     try:
         client = SFTPClientWrapper(
@@ -119,57 +139,38 @@ def main():
         
         print(f"Found {len(local_files)} files.")
 
-        # 4. Filter Files (Delta Check)
-        upload_tasks = []
-        new_hashes = {}
+        # 4. Parallel Process (Hash & Upload)
+        print(f"Starting processing with {concurrency} workers...")
+        start_time = time.time()
 
+        task_queue = queue.Queue()
         for rel_path in local_files:
-            full_local_path = os.path.join(local_dir, rel_path)
-            
-            # Compute local hash
-            current_hash = compute_file_hash(full_local_path)
-            new_hashes[rel_path] = current_hash
-            
-            # Check if skip
-            remote_hash = hash_manager.get_remote_hash(rel_path)
-            
-            if force_upload or remote_hash != current_hash:
-                upload_tasks.append(rel_path)
-            else:
-                # Hash match, skip
-                pass
+            task_queue.put(rel_path)
         
-        print(f"Files to upload: {len(upload_tasks)}")
+        result_queue = queue.Queue()
+        threads = []
+        error_list = []
+        
+        for i in range(concurrency):
+            t = threading.Thread(target=worker_task, args=(i+1, client, task_queue, result_queue, error_list, local_dir, remote_dir, dry_run, hash_manager, force_upload))
+            t.start()
+            threads.append(t)
+            
+        for t in threads:
+            t.join()
+            
+        if error_list:
+            print(f"Upload/Hash check completed with {len(error_list)} errors.")
+            sys.exit(1)
 
-        if not upload_tasks:
-            print("Everything up to date.")
-            pass
-        else:
-            # 5. Parallel Upload
-            print(f"Starting upload with {concurrency} workers...")
-            start_time = time.time()
-            
-            task_queue = queue.Queue()
-            for task in upload_tasks:
-                task_queue.put(task)
-            
-            threads = []
-            error_list = []
-            
-            for i in range(concurrency):
-                t = threading.Thread(target=worker_task, args=(i+1, client, task_queue, error_list, local_dir, remote_dir, dry_run))
-                t.start()
-                threads.append(t)
-                
-            for t in threads:
-                t.join()
-                
-            if error_list:
-                print(f"Upload completed with {len(error_list)} errors.")
-                sys.exit(1)
+        # Collect results
+        new_hashes = {}
+        while not result_queue.empty():
+            rel_path, h = result_queue.get()
+            new_hashes[rel_path] = h
 
-            duration = time.time() - start_time
-            print(f"Upload completed in {duration:.2f}s")
+        duration = time.time() - start_time
+        print(f"Processing completed in {duration:.2f}s")
 
         # 7. Remove Extra Files
         if remove_extra_files:
