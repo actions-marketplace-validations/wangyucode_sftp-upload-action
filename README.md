@@ -1,5 +1,7 @@
 # SFTP Upload Action (v3)
 
+[![Release](https://github.com/wangyucode/sftp-upload-action/actions/workflows/release.yml/badge.svg)](https://github.com/wangyucode/sftp-upload-action/actions/workflows/release.yml) [![GitHub release (latest by date)](https://img.shields.io/github/v/release/wangyucode/sftp-upload-action)](https://github.com/wangyucode/sftp-upload-action/releases)
+
 [🇨🇳 简体中文](./README_zh.md)
 
 A GitHub Action to upload files to a server via SFTP.

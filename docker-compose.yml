@@ -1,0 +1,8 @@
+services:
+  sftp:
+    image: atmoz/sftp
+    ports:
+      - "2222:22"
+    command: testuser:testpass:1001
+    volumes:
+      - ./test_remote:/home/testuser/upload
